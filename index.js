@@ -174,7 +174,8 @@ app.post("/ai/three-card/clear", async (req, res) => {
 
     const ai = await openai.responses.create({
       model: "o4-mini",
-      input: prompt
+      input: prompt,
+      max_output_tokens: 500
     });
 
     console.log("✅ OpenAI responded");
