@@ -163,6 +163,8 @@ app.post("/ai/three-card/clear", async (req, res) => {
   }
 
   try {
+    console.log("➡️ calling OpenAI");
+
     const prompt = buildClearPrompt({
       question,
       context,
@@ -175,9 +177,13 @@ app.post("/ai/three-card/clear", async (req, res) => {
       input: prompt
     });
 
-    const text = ai.output_text;
+    console.log("✅ OpenAI responded");
 
+    const text = ai.output_text;
     const parsed = JSON.parse(text);
+
+    console.log("✅ JSON parsed, returning to client");
+
     return res.json(parsed);
 
   } catch (err) {
