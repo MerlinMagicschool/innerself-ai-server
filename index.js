@@ -18,7 +18,7 @@ app.get("/health", (req, res) => {
   });
 });
 
-/* ---------- Prompt builder ---------- */
+/* ---------- Prompt builders ---------- */
 /**
  * Build clear JSON prompt (must match PromptCatalog.clearV1JSON)
  */
@@ -103,8 +103,56 @@ C-1) ${branchCards[6]}  C-2) ${branchCards[7]}  C-3) ${branchCards[8]}
 `;
 }
 
+/**
+ * Build basic JSON prompt (must match PromptCatalog.basicV1JSON)
+ */
+function buildBasicPrompt({ question, context, mainCards }) {
+  const ctx = context && context.trim() ? context.trim() : "null";
+
+  return `
+你是 innerSelf App 的「基礎版三張回應卡」引導者。
+抽牌已在 App 端完成，你不需要也不可以再抽牌。
+
+你的任務：
+- 3 張主牌代表三個行動方向（A/B/C）
+- 每個方向輸出 actionDirection（10–18 字）與 possibleOutcome（≤30 字）
+- 請輸出「嚴格 JSON」
+
+【輸入】
+- 使用者問題：${question}
+-（可選）既有前提／已選擇的路徑：${ctx}
+
+主牌：
+A) ${mainCards[0]}
+B) ${mainCards[1]}
+C) ${mainCards[2]}
+
+【嚴格規則】
+1) 不改寫牌文。
+2) 每張牌都要有 actionDirection（10–18 字）與 possibleOutcome（≤30 字）。
+3) 不占卜、不保證、不下結論。
+4) 嚴格輸出 JSON，不得有多餘文字。
+
+【輸出 JSON Schema】
+{
+  "version": "basic_v1_json",
+  "language": "zh-Hant",
+  "question": string,
+  "context": string | null,
+  "directions": [
+    { "id": "A", "cardText": string, "actionDirection": string, "possibleOutcome": string },
+    { "id": "B", "cardText": string, "actionDirection": string, "possibleOutcome": string },
+    { "id": "C", "cardText": string, "actionDirection": string, "possibleOutcome": string }
+  ]
+}
+
+【開始】
+請直接輸出 JSON。
+`;
+}
+
 /* ---------- Fallback ---------- */
-function fallbackResponse({ question, context, mainCards, branchCards }) {
+function fallbackClearResponse({ question, context, mainCards, branchCards }) {
   return {
     version: "clear_v1_json",
     language: "zh-Hant",
@@ -148,7 +196,36 @@ function fallbackResponse({ question, context, mainCards, branchCards }) {
   };
 }
 
-/* ---------- API ---------- */
+function fallbackBasicResponse({ question, context, mainCards }) {
+  return {
+    version: "basic_v1_json",
+    language: "zh-Hant",
+    question,
+    context: context ?? null,
+    directions: [
+      {
+        id: "A",
+        cardText: mainCards[0],
+        actionDirection: "先把重點拉回自己",
+        possibleOutcome: "你會更清楚下一步該怎麼做。"
+      },
+      {
+        id: "B",
+        cardText: mainCards[1],
+        actionDirection: "先做一個小試探",
+        possibleOutcome: "你會得到可用的回饋與線索。"
+      },
+      {
+        id: "C",
+        cardText: mainCards[2],
+        actionDirection: "調整節奏再前進",
+        possibleOutcome: "壓力下降，行動更能持續。"
+      }
+    ]
+  };
+}
+
+/* ---------- API: Clear ---------- */
 app.post("/ai/three-card/clear", async (req, res) => {
   const { question, context, mainCards, branchCards } = req.body || {};
 
@@ -163,7 +240,7 @@ app.post("/ai/three-card/clear", async (req, res) => {
   }
 
   try {
-    console.log("➡️ calling OpenAI");
+    console.log("➡️ calling OpenAI (clear)");
 
     const prompt = buildClearPrompt({
       question,
@@ -178,19 +255,57 @@ app.post("/ai/three-card/clear", async (req, res) => {
       max_output_tokens: 500
     });
 
-    console.log("✅ OpenAI responded");
+    console.log("✅ OpenAI responded (clear)");
 
     const text = ai.output_text;
     const parsed = JSON.parse(text);
 
-    console.log("✅ JSON parsed, returning to client");
+    console.log("✅ JSON parsed, returning to client (clear)");
 
     return res.json(parsed);
-
   } catch (err) {
-    console.error("⚠️ OpenAI failed, fallback used:", err);
+    console.error("⚠️ OpenAI failed (clear), fallback used:", err);
     return res.json(
-      fallbackResponse({ question, context, mainCards, branchCards })
+      fallbackClearResponse({ question, context, mainCards, branchCards })
+    );
+  }
+});
+
+/* ---------- API: Basic ---------- */
+app.post("/ai/three-card/basic", async (req, res) => {
+  const { question, context, mainCards } = req.body || {};
+
+  if (!question || !Array.isArray(mainCards) || mainCards.length !== 3) {
+    return res.status(400).json({ error: "Invalid request body" });
+  }
+
+  try {
+    console.log("➡️ calling OpenAI (basic)");
+
+    const prompt = buildBasicPrompt({
+      question,
+      context,
+      mainCards
+    });
+
+    const ai = await openai.responses.create({
+      model: "o4-mini",
+      input: prompt,
+      max_output_tokens: 500
+    });
+
+    console.log("✅ OpenAI responded (basic)");
+
+    const text = ai.output_text;
+    const parsed = JSON.parse(text);
+
+    console.log("✅ JSON parsed, returning to client (basic)");
+
+    return res.json(parsed);
+  } catch (err) {
+    console.error("⚠️ OpenAI failed (basic), fallback used:", err);
+    return res.json(
+      fallbackBasicResponse({ question, context, mainCards })
     );
   }
 });
