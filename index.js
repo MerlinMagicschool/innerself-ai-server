@@ -282,7 +282,7 @@ app.post("/ai/three-card/clear", async (req, res) => {
     const ai = await openai.responses.create({
       model: "o4-mini",
       input: prompt,
-      max_output_tokens: 500
+      max_output_tokens: 1200
     });
 
     console.log("✅ OpenAI responded (clear)");
@@ -321,7 +321,7 @@ app.post("/ai/three-card/basic", async (req, res) => {
     const ai = await openai.responses.create({
       model: "o4-mini",
       input: prompt,
-      max_output_tokens: 500
+      max_output_tokens: 1200
     });
 
     console.log("✅ OpenAI responded (basic)");
