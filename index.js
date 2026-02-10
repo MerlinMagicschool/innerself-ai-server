@@ -23,12 +23,12 @@ function badRequest(res, message) {
 }
 
 function extractText(resp) {
-  // 1) SDK convenience (sometimes empty depending on format)
+  // 1) SDK convenience
   if (typeof resp?.output_text === "string" && resp.output_text.trim().length > 0) {
     return resp.output_text.trim();
   }
 
-  // 2) Walk through output -> content to find any text
+  // 2) Walk through output -> content
   const chunks = [];
   const out = resp?.output;
   if (Array.isArray(out)) {
@@ -42,14 +42,31 @@ function extractText(resp) {
       }
     }
   }
-
-  if (chunks.length > 0) return chunks.join("\n");
-  return "";
+  return chunks.length ? chunks.join("") : "";
 }
 
-/* ---------- Prompt builders (你的新版規則文字，可維持) ---------- */
+function parseModelJSON(raw) {
+  const s = (raw ?? "").trim();
+  if (!s) {
+    const err = new Error("EMPTY_MODEL_OUTPUT");
+    err.code = "EMPTY_MODEL_OUTPUT";
+    throw err;
+  }
+  try {
+    return JSON.parse(s);
+  } catch (e) {
+    const err = new Error("JSON_PARSE_FAILED");
+    err.code = "JSON_PARSE_FAILED";
+    err.details = e?.message ?? String(e);
+    err.preview = s.slice(0, 600);
+    throw err;
+  }
+}
+
+/* ---------- Prompt builders (只允許 JSON) ---------- */
 function buildBasicPrompt({ question, context, mainCards }) {
   const ctx = context && context.trim() ? context.trim() : "null";
+
   return `
 你是 innerSelf App 的「基礎版三張回應卡」引導者。
 抽牌已在 App 端完成，你不需要也不可以再抽牌。
@@ -65,25 +82,38 @@ C) ${mainCards[2]}
 
 【嚴格規則】
 1) 不改寫牌文（cardText 必須逐字等於輸入）。
-2) 每張牌都要有 actionDirection（15～30 個全形中文字）與 possibleOutcome（≤50 個全形中文字）。
+2) 每張牌都要有：
+   - actionDirection：一句（15～30 個全形中文字）
+   - possibleOutcome：一句（≤50 個全形中文字，含標點）
 3) 【定錨規則】actionDirection 與 possibleOutcome 必須同時回應：
    - 使用者問題
    -（若有）既有前提／已選擇的路徑
    - 該牌卡在此情境下提供的行動視角
    不得只描述抽象態度或通用建議。
 4) 不占卜、不保證、不下結論。
+5) 只能輸出「單一 JSON 物件」，不得包含任何額外文字，不得使用 Markdown。
 
-【輸出】
-請用「可讀的文字段落」輸出（先不要 JSON）。
-每張牌用以下格式：
-- [A] 牌文：...
-  行動方向：...
-  可能結果：...
+【輸出 JSON Schema（必須完全符合）】
+{
+  "version": "basic_v1_json",
+  "language": "zh-Hant",
+  "question": string,
+  "context": string | null,
+  "directions": [
+    { "id": "A", "cardText": string, "actionDirection": string, "possibleOutcome": string },
+    { "id": "B", "cardText": string, "actionDirection": string, "possibleOutcome": string },
+    { "id": "C", "cardText": string, "actionDirection": string, "possibleOutcome": string }
+  ]
+}
+
+【開始】
+請直接輸出符合 Schema 的 JSON。
 `.trim();
 }
 
 function buildClearPrompt({ question, context, mainCards, branchCards }) {
   const ctx = context && context.trim() ? context.trim() : "null";
+
   return `
 你是 innerSelf App 的「明晰版三張回應卡」引導者。
 抽牌已在 App 端完成，你不需要也不可以再抽牌。
@@ -104,30 +134,67 @@ C-1) ${branchCards[6]}  C-2) ${branchCards[7]}  C-3) ${branchCards[8]}
 
 【嚴格規則】
 1) 不改寫牌文（cardText 必須逐字等於輸入）。
-2) 主牌 actionDirection（15～30 全形字）與 possibleOutcome（≤50 全形字）。
-3) 子牌只輸出 possibleOutcome（≤50 全形字）。
+2) 主牌 A/B/C：每個都要有
+   - actionDirection：一句（15～30 個全形中文字）
+   - possibleOutcome：一句（≤50 個全形中文字，含標點）
+3) 子牌（A-1~C-3）：只輸出
+   - possibleOutcome：一句（≤50 個全形中文字，含標點）
 4) 【定錨規則】主牌 actionDirection 與 possibleOutcome 必須同時回應：
    - 使用者問題
    -（若有）既有前提／已選擇的路徑
    - 該牌卡在此情境下提供的行動視角
    不得只描述抽象態度或通用建議。
-5) 不占卜、不保證、不下結論。
+5) 只能輸出「單一 JSON 物件」，不得包含任何額外文字，不得使用 Markdown。
 
-【輸出】
-請用「可讀的文字段落」輸出（先不要 JSON）。
-格式：
-[A] 主牌：...
-  行動方向：...
-  主結果：...
-  子牌：
-    - A-1 ...：...
-    - A-2 ...：...
-    - A-3 ...：...
-(依序輸出 B / C)
+【輸出 JSON Schema（必須完全符合）】
+{
+  "version": "clear_v1_json",
+  "language": "zh-Hant",
+  "question": string,
+  "context": string | null,
+  "directions": [
+    {
+      "id": "A",
+      "cardText": string,
+      "actionDirection": string,
+      "possibleOutcome": string,
+      "branches": [
+        { "id": "A-1", "cardText": string, "possibleOutcome": string },
+        { "id": "A-2", "cardText": string, "possibleOutcome": string },
+        { "id": "A-3", "cardText": string, "possibleOutcome": string }
+      ]
+    },
+    {
+      "id": "B",
+      "cardText": string,
+      "actionDirection": string,
+      "possibleOutcome": string,
+      "branches": [
+        { "id": "B-1", "cardText": string, "possibleOutcome": string },
+        { "id": "B-2", "cardText": string, "possibleOutcome": string },
+        { "id": "B-3", "cardText": string, "possibleOutcome": string }
+      ]
+    },
+    {
+      "id": "C",
+      "cardText": string,
+      "actionDirection": string,
+      "possibleOutcome": string,
+      "branches": [
+        { "id": "C-1", "cardText": string, "possibleOutcome": string },
+        { "id": "C-2", "cardText": string, "possibleOutcome": string },
+        { "id": "C-3", "cardText": string, "possibleOutcome": string }
+      ]
+    }
+  ]
+}
+
+【開始】
+請直接輸出符合 Schema 的 JSON。
 `.trim();
 }
 
-/* ---------- API: Basic (RAW) ---------- */
+/* ---------- API: Basic (JSON) ---------- */
 app.post("/ai/three-card/basic", async (req, res) => {
   const { question, context, mainCards } = req.body || {};
   if (!question) return badRequest(res, "missing question");
@@ -143,38 +210,37 @@ app.post("/ai/three-card/basic", async (req, res) => {
     const ai = await openai.responses.create({
       model: "o4-mini",
       input: prompt,
+      // ✅ Responses API 正確的 JSON mode 參數
+      text: { format: { type: "json_object" } },
+      // 暫時不設 max_output_tokens（你要先回到原始行為排查）
     });
 
-    const raw = extractText(ai);
-
-    console.log("🔎 output_text length:", (ai.output_text || "").length);
-    console.log("🔎 extracted text chars:", (raw || "").length);
-
+    console.log("🔎 output_text len:", (ai.output_text || "").length);
     console.log(
       "🔎 raw OpenAI response (truncated):",
       JSON.stringify(ai, null, 2).slice(0, 4000)
     );
 
-    if (raw && raw.trim().length > 0) {
-      return res.type("text/plain; charset=utf-8").send(raw);
-    }
+    const raw = extractText(ai);
+    console.log("🔎 extracted len:", raw.length);
+    console.log("🔎 extracted preview:", raw.slice(0, 400));
 
-    // 如果真的抽不到文字，就把 ai 結構回傳（讓你查是哪個欄位）
-    return res
-      .status(200)
-      .type("application/json; charset=utf-8")
-      .send(JSON.stringify({ note: "NO_TEXT_EXTRACTED", ai }, null, 2));
+    const parsed = parseModelJSON(raw);
+    return res.json(parsed);
+
   } catch (err) {
-    console.error("⚠️ OpenAI failed (basic):", err);
+    console.error("⚠️ OpenAI failed (basic):", err?.code ?? err, err?.preview ? `preview=${err.preview}` : "");
     return res.status(502).json({
       error: "OPENAI_BASIC_FAILED",
       message: err?.message ?? String(err),
       code: err?.code ?? null,
+      preview: err?.preview ?? null,
+      details: err?.details ?? null,
     });
   }
 });
 
-/* ---------- API: Clear (RAW) ---------- */
+/* ---------- API: Clear (JSON) ---------- */
 app.post("/ai/three-card/clear", async (req, res) => {
   const { question, context, mainCards, branchCards } = req.body || {};
   if (!question) return badRequest(res, "missing question");
@@ -193,32 +259,30 @@ app.post("/ai/three-card/clear", async (req, res) => {
     const ai = await openai.responses.create({
       model: "o4-mini",
       input: prompt,
+      text: { format: { type: "json_object" } },
     });
 
-    const raw = extractText(ai);
-
-    console.log("🔎 output_text length:", (ai.output_text || "").length);
-    console.log("🔎 extracted text chars:", (raw || "").length);
-
+    console.log("🔎 output_text len:", (ai.output_text || "").length);
     console.log(
       "🔎 raw OpenAI response (truncated):",
       JSON.stringify(ai, null, 2).slice(0, 4000)
     );
 
-    if (raw && raw.trim().length > 0) {
-      return res.type("text/plain; charset=utf-8").send(raw);
-    }
+    const raw = extractText(ai);
+    console.log("🔎 extracted len:", raw.length);
+    console.log("🔎 extracted preview:", raw.slice(0, 400));
 
-    return res
-      .status(200)
-      .type("application/json; charset=utf-8")
-      .send(JSON.stringify({ note: "NO_TEXT_EXTRACTED", ai }, null, 2));
+    const parsed = parseModelJSON(raw);
+    return res.json(parsed);
+
   } catch (err) {
-    console.error("⚠️ OpenAI failed (clear):", err);
+    console.error("⚠️ OpenAI failed (clear):", err?.code ?? err, err?.preview ? `preview=${err.preview}` : "");
     return res.status(502).json({
       error: "OPENAI_CLEAR_FAILED",
       message: err?.message ?? String(err),
       code: err?.code ?? null,
+      preview: err?.preview ?? null,
+      details: err?.details ?? null,
     });
   }
 });
