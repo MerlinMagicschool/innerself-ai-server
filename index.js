@@ -266,6 +266,14 @@ app.post("/ai/three-card/basic", async (req, res) => {
       max_output_tokens: 500,
     });
 
+    console.log("🔎 raw OpenAI response keys:", Object.keys(ai));
+    console.log("🔎 output_text length:", (ai.output_text || "").length);
+
+// 注意：整包可能很大，務必截斷
+    console.log(
+        "🔎 raw OpenAI response (truncated):",
+        JSON.stringify(ai, null, 2).slice(0, 4000)
+    );
     const raw = extractText(ai);
     console.log(`✅ OpenAI responded (basic), chars: ${raw.trim().length}`);
 
@@ -296,7 +304,14 @@ app.post("/ai/three-card/clear", async (req, res) => {
       text: { format: { type: "json_object" } },
       max_output_tokens: 500,
     });
+    console.log("🔎 raw OpenAI response keys:", Object.keys(ai));
+    console.log("🔎 output_text length:", (ai.output_text || "").length);
 
+    // 注意：整包可能很大，務必截斷
+    console.log(
+        "🔎 raw OpenAI response (truncated):",
+        JSON.stringify(ai, null, 2).slice(0, 4000)
+    );
     const raw = extractText(ai);
     console.log(`✅ OpenAI responded (clear), chars: ${raw.trim().length}`);
 
