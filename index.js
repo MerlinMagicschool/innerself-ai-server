@@ -209,12 +209,7 @@ async function callOpenAIJSON({ prompt, tag }) {
   const resp = await openai.responses.create({
     model: "o4-mini",
     input: prompt,
-
-    // ✅ 強制 JSON object（最關鍵）
-    text: { format: { type: "json_object" } },
-
-    // ✅ 先保留 minimal，加速推理（若你懷疑影響品質可再拿掉）
-    reasoning_effort: "minimal",
+    text: { format: { type: "json_object" } }
   });
 
   const t1 = nowMs();
