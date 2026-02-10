@@ -23,9 +23,9 @@ function badRequest(res, message) {
 }
 
 function extractText(resp) {
-  // 1) SDK convenience (may be empty depending on format)
-  if (typeof resp?.output_text === "string" && resp.output_text.length > 0) {
-    return resp.output_text;
+  // 1) SDK convenience (sometimes empty depending on format)
+  if (typeof resp?.output_text === "string" && resp.output_text.trim().length > 0) {
+    return resp.output_text.trim();
   }
 
   // 2) Walk through output -> content to find any text
@@ -36,37 +36,18 @@ function extractText(resp) {
       const content = item?.content;
       if (!Array.isArray(content)) continue;
       for (const c of content) {
-        // possible shapes: { type: "output_text", text: "..." } or { type: "text", text: "..." }
-        if (typeof c?.text === "string" && c.text.length > 0) {
-          chunks.push(c.text);
+        if (typeof c?.text === "string" && c.text.trim().length > 0) {
+          chunks.push(c.text.trim());
         }
       }
     }
   }
 
-  if (chunks.length > 0) return chunks.join("");
+  if (chunks.length > 0) return chunks.join("\n");
   return "";
 }
 
-function parseModelJSON(raw) {
-  const s = (raw ?? "").trim();
-  if (!s) {
-    const err = new Error("EMPTY_MODEL_OUTPUT");
-    err.code = "EMPTY_MODEL_OUTPUT";
-    throw err;
-  }
-  try {
-    return JSON.parse(s);
-  } catch (e) {
-    const err = new Error("JSON_PARSE_FAILED");
-    err.code = "JSON_PARSE_FAILED";
-    err.details = e?.message ?? String(e);
-    err.preview = s.slice(0, 300);
-    throw err;
-  }
-}
-
-/* ---------- Prompt builders (use your updated rules) ---------- */
+/* ---------- Prompt builders (你的新版規則文字，可維持) ---------- */
 function buildBasicPrompt({ question, context, mainCards }) {
   const ctx = context && context.trim() ? context.trim() : "null";
   return `
@@ -91,22 +72,13 @@ C) ${mainCards[2]}
    - 該牌卡在此情境下提供的行動視角
    不得只描述抽象態度或通用建議。
 4) 不占卜、不保證、不下結論。
-5) 嚴格輸出 JSON，不得有多餘文字。
 
-【輸出 JSON Schema】
-{
-  "version": "basic_v1_json",
-  "language": "zh-Hant",
-  "question": string,
-  "context": string | null,
-  "directions": [
-    { "id": "A", "cardText": string, "actionDirection": string, "possibleOutcome": string },
-    { "id": "B", "cardText": string, "actionDirection": string, "possibleOutcome": string },
-    { "id": "C", "cardText": string, "actionDirection": string, "possibleOutcome": string }
-  ]
-}
-
-請直接輸出 JSON。
+【輸出】
+請用「可讀的文字段落」輸出（先不要 JSON）。
+每張牌用以下格式：
+- [A] 牌文：...
+  行動方向：...
+  可能結果：...
 `.trim();
 }
 
@@ -139,119 +111,29 @@ C-1) ${branchCards[6]}  C-2) ${branchCards[7]}  C-3) ${branchCards[8]}
    -（若有）既有前提／已選擇的路徑
    - 該牌卡在此情境下提供的行動視角
    不得只描述抽象態度或通用建議。
-5) 嚴格輸出 JSON，不得有多餘文字。
+5) 不占卜、不保證、不下結論。
 
-【輸出 JSON Schema】
-{
-  "version": "clear_v1_json",
-  "language": "zh-Hant",
-  "question": string,
-  "context": string | null,
-  "directions": [
-    {
-      "id": "A",
-      "cardText": string,
-      "actionDirection": string,
-      "possibleOutcome": string,
-      "branches": [
-        { "id": "A-1", "cardText": string, "possibleOutcome": string },
-        { "id": "A-2", "cardText": string, "possibleOutcome": string },
-        { "id": "A-3", "cardText": string, "possibleOutcome": string }
-      ]
-    },
-    {
-      "id": "B",
-      "cardText": string,
-      "actionDirection": string,
-      "possibleOutcome": string,
-      "branches": [
-        { "id": "B-1", "cardText": string, "possibleOutcome": string },
-        { "id": "B-2", "cardText": string, "possibleOutcome": string },
-        { "id": "B-3", "cardText": string, "possibleOutcome": string }
-      ]
-    },
-    {
-      "id": "C",
-      "cardText": string,
-      "actionDirection": string,
-      "possibleOutcome": string,
-      "branches": [
-        { "id": "C-1", "cardText": string, "possibleOutcome": string },
-        { "id": "C-2", "cardText": string, "possibleOutcome": string },
-        { "id": "C-3", "cardText": string, "possibleOutcome": string }
-      ]
-    }
-  ]
-}
-
-請直接輸出 JSON。
+【輸出】
+請用「可讀的文字段落」輸出（先不要 JSON）。
+格式：
+[A] 主牌：...
+  行動方向：...
+  主結果：...
+  子牌：
+    - A-1 ...：...
+    - A-2 ...：...
+    - A-3 ...：...
+(依序輸出 B / C)
 `.trim();
 }
 
-/* ---------- Fallbacks ---------- */
-function fallbackBasicResponse({ question, context, mainCards }) {
-  return {
-    version: "basic_v1_json",
-    language: "zh-Hant",
-    question,
-    context: context ?? null,
-    directions: [
-      { id: "A", cardText: mainCards[0], actionDirection: "先把注意力拉回可控的一步", possibleOutcome: "焦慮下降，下一步更容易啟動。" },
-      { id: "B", cardText: mainCards[1], actionDirection: "用小試探換取更真實的回饋", possibleOutcome: "資訊變多，判斷會更貼近現況。" },
-      { id: "C", cardText: mainCards[2], actionDirection: "調整節奏與界線後再往前推", possibleOutcome: "消耗變少，行動更能持續。" },
-    ],
-  };
-}
-
-function fallbackClearResponse({ question, context, mainCards, branchCards }) {
-  return {
-    version: "clear_v1_json",
-    language: "zh-Hant",
-    question,
-    context: context ?? null,
-    directions: [
-      {
-        id: "A",
-        cardText: mainCards[0],
-        actionDirection: "先觀察整體狀態再推進",
-        possibleOutcome: "方向會逐漸明朗，但仍需時間。",
-        branches: [
-          { id: "A-1", cardText: branchCards[0], possibleOutcome: "你會察覺目前的限制。" },
-          { id: "A-2", cardText: branchCards[1], possibleOutcome: "節奏感會變得清楚。" },
-          { id: "A-3", cardText: branchCards[2], possibleOutcome: "你會減少內在拉扯。" },
-        ],
-      },
-      {
-        id: "B",
-        cardText: mainCards[1],
-        actionDirection: "調整資源配置與界線",
-        possibleOutcome: "壓力降低，選擇更一致。",
-        branches: [
-          { id: "B-1", cardText: branchCards[3], possibleOutcome: "你會釐清真正的重點。" },
-          { id: "B-2", cardText: branchCards[4], possibleOutcome: "會出現支援的可能。" },
-          { id: "B-3", cardText: branchCards[5], possibleOutcome: "你會更安心行動。" },
-        ],
-      },
-      {
-        id: "C",
-        cardText: mainCards[2],
-        actionDirection: "先行動再修正方向",
-        possibleOutcome: "進展出現，但需反覆調整。",
-        branches: [
-          { id: "C-1", cardText: branchCards[6], possibleOutcome: "你會獲得實際回饋。" },
-          { id: "C-2", cardText: branchCards[7], possibleOutcome: "假設會被重新檢視。" },
-          { id: "C-3", cardText: branchCards[8], possibleOutcome: "下一步逐漸成形。" },
-        ],
-      },
-    ],
-  };
-}
-
-/* ---------- API: Basic ---------- */
+/* ---------- API: Basic (RAW) ---------- */
 app.post("/ai/three-card/basic", async (req, res) => {
   const { question, context, mainCards } = req.body || {};
   if (!question) return badRequest(res, "missing question");
-  if (!Array.isArray(mainCards) || mainCards.length !== 3) return badRequest(res, "mainCards must be length 3");
+  if (!Array.isArray(mainCards) || mainCards.length !== 3) {
+    return badRequest(res, "mainCards must be length 3");
+  }
 
   try {
     console.log("➡️ calling OpenAI (basic)");
@@ -261,37 +143,47 @@ app.post("/ai/three-card/basic", async (req, res) => {
     const ai = await openai.responses.create({
       model: "o4-mini",
       input: prompt,
-      // ✅ Responses API: JSON mode uses text.format (not response_format)
-      text: { format: { type: "json_object" } },
-      max_output_tokens: 500,
     });
 
-    console.log("🔎 raw OpenAI response keys:", Object.keys(ai));
-    console.log("🔎 output_text length:", (ai.output_text || "").length);
-
-// 注意：整包可能很大，務必截斷
-    console.log(
-        "🔎 raw OpenAI response (truncated):",
-        JSON.stringify(ai, null, 2).slice(0, 4000)
-    );
     const raw = extractText(ai);
-    console.log(`✅ OpenAI responded (basic), chars: ${raw.trim().length}`);
 
-    const parsed = parseModelJSON(raw);
-    return res.json(parsed);
+    console.log("🔎 output_text length:", (ai.output_text || "").length);
+    console.log("🔎 extracted text chars:", (raw || "").length);
 
+    console.log(
+      "🔎 raw OpenAI response (truncated):",
+      JSON.stringify(ai, null, 2).slice(0, 4000)
+    );
+
+    if (raw && raw.trim().length > 0) {
+      return res.type("text/plain; charset=utf-8").send(raw);
+    }
+
+    // 如果真的抽不到文字，就把 ai 結構回傳（讓你查是哪個欄位）
+    return res
+      .status(200)
+      .type("application/json; charset=utf-8")
+      .send(JSON.stringify({ note: "NO_TEXT_EXTRACTED", ai }, null, 2));
   } catch (err) {
-    console.error("⚠️ OpenAI failed (basic), fallback used:", err?.code ?? err, err?.preview ? `preview=${err.preview}` : "");
-    return res.json(fallbackBasicResponse({ question, context, mainCards }));
+    console.error("⚠️ OpenAI failed (basic):", err);
+    return res.status(502).json({
+      error: "OPENAI_BASIC_FAILED",
+      message: err?.message ?? String(err),
+      code: err?.code ?? null,
+    });
   }
 });
 
-/* ---------- API: Clear ---------- */
+/* ---------- API: Clear (RAW) ---------- */
 app.post("/ai/three-card/clear", async (req, res) => {
   const { question, context, mainCards, branchCards } = req.body || {};
   if (!question) return badRequest(res, "missing question");
-  if (!Array.isArray(mainCards) || mainCards.length !== 3) return badRequest(res, "mainCards must be length 3");
-  if (!Array.isArray(branchCards) || branchCards.length !== 9) return badRequest(res, "branchCards must be length 9");
+  if (!Array.isArray(mainCards) || mainCards.length !== 3) {
+    return badRequest(res, "mainCards must be length 3");
+  }
+  if (!Array.isArray(branchCards) || branchCards.length !== 9) {
+    return badRequest(res, "branchCards must be length 9");
+  }
 
   try {
     console.log("➡️ calling OpenAI (clear)");
@@ -301,26 +193,33 @@ app.post("/ai/three-card/clear", async (req, res) => {
     const ai = await openai.responses.create({
       model: "o4-mini",
       input: prompt,
-      text: { format: { type: "json_object" } },
-      max_output_tokens: 500,
     });
-    console.log("🔎 raw OpenAI response keys:", Object.keys(ai));
-    console.log("🔎 output_text length:", (ai.output_text || "").length);
 
-    // 注意：整包可能很大，務必截斷
-    console.log(
-        "🔎 raw OpenAI response (truncated):",
-        JSON.stringify(ai, null, 2).slice(0, 4000)
-    );
     const raw = extractText(ai);
-    console.log(`✅ OpenAI responded (clear), chars: ${raw.trim().length}`);
 
-    const parsed = parseModelJSON(raw);
-    return res.json(parsed);
+    console.log("🔎 output_text length:", (ai.output_text || "").length);
+    console.log("🔎 extracted text chars:", (raw || "").length);
 
+    console.log(
+      "🔎 raw OpenAI response (truncated):",
+      JSON.stringify(ai, null, 2).slice(0, 4000)
+    );
+
+    if (raw && raw.trim().length > 0) {
+      return res.type("text/plain; charset=utf-8").send(raw);
+    }
+
+    return res
+      .status(200)
+      .type("application/json; charset=utf-8")
+      .send(JSON.stringify({ note: "NO_TEXT_EXTRACTED", ai }, null, 2));
   } catch (err) {
-    console.error("⚠️ OpenAI failed (clear), fallback used:", err?.code ?? err, err?.preview ? `preview=${err.preview}` : "");
-    return res.json(fallbackClearResponse({ question, context, mainCards, branchCards }));
+    console.error("⚠️ OpenAI failed (clear):", err);
+    return res.status(502).json({
+      error: "OPENAI_CLEAR_FAILED",
+      message: err?.message ?? String(err),
+      code: err?.code ?? null,
+    });
   }
 });
 
