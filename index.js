@@ -10,7 +10,11 @@ const openai = new OpenAI({
 
 /* ---------- Health ---------- */
 app.get("/health", (req, res) => {
-  res.json({ ok: true, service: "innerself-ai", time: new Date().toISOString() });
+  res.json({
+    ok: true,
+    service: "innerself-ai",
+    time: new Date().toISOString(),
+  });
 });
 
 /* ---------- Utils ---------- */
@@ -19,73 +23,59 @@ function badRequest(res, message) {
 }
 
 /**
- * Robustly extract text from Responses API object.
- * We do NOT rely on output_text (often empty).
+ * Extract any text from Responses API result.
+ * (output_text may be empty depending on format; so we also walk output[].content[].text)
  */
-function extractTextFromResponses(resp) {
+function extractText(resp) {
+  if (typeof resp?.output_text === "string" && resp.output_text.trim().length > 0) {
+    return resp.output_text.trim();
+  }
+
   const out = resp?.output;
-  if (!Array.isArray(out)) return "";
-
-  const chunks = [];
-  for (const item of out) {
-    const content = item?.content;
-    if (!Array.isArray(content)) continue;
-
-    for (const c of content) {
-      // Most common: { type: "output_text", text: "..." }
-      // Sometimes:   { type: "text", text: "..." }
-      if (typeof c?.text === "string" && c.text.trim().length > 0) {
-        chunks.push(c.text);
+  if (Array.isArray(out)) {
+    const chunks = [];
+    for (const item of out) {
+      const content = item?.content;
+      if (!Array.isArray(content)) continue;
+      for (const c of content) {
+        if (typeof c?.text === "string" && c.text.trim().length > 0) {
+          chunks.push(c.text.trim());
+        }
       }
     }
+    if (chunks.length > 0) return chunks.join("\n");
   }
-  return chunks.join("").trim();
-}
 
-/**
- * If model output includes extra text, try to cut out the first JSON object.
- * This prevents "Unexpected end" when there is trailing non-JSON or leading labels.
- */
-function extractFirstJSONObject(raw) {
-  const s = (raw ?? "").trim();
-  if (!s) return "";
-
-  // If already looks like JSON object, return directly
-  if (s.startsWith("{") && s.endsWith("}")) return s;
-
-  // Try find first '{' and last '}' and take that slice
-  const first = s.indexOf("{");
-  const last = s.lastIndexOf("}");
-  if (first >= 0 && last > first) {
-    return s.slice(first, last + 1).trim();
-  }
   return "";
 }
 
+/**
+ * Robust JSON parse:
+ * - throws EMPTY_MODEL_OUTPUT if empty
+ * - throws JSON_PARSE_FAILED with preview if cannot parse
+ */
 function parseModelJSON(raw) {
-  const s0 = (raw ?? "").trim();
-  if (!s0) {
+  const s = (raw ?? "").trim();
+  if (!s) {
     const err = new Error("EMPTY_MODEL_OUTPUT");
     err.code = "EMPTY_MODEL_OUTPUT";
     throw err;
   }
-
-  const s = extractFirstJSONObject(s0) || s0;
-
   try {
     return JSON.parse(s);
   } catch (e) {
     const err = new Error("JSON_PARSE_FAILED");
     err.code = "JSON_PARSE_FAILED";
     err.details = e?.message ?? String(e);
-    err.preview = s.slice(0, 800);
+    err.preview = s.slice(0, 400);
     throw err;
   }
 }
 
-/* ---------- Prompt builders (keep yours; here minimal demo) ---------- */
+/* ---------- Prompt builders (aligned with your PromptCatalog rules) ---------- */
 function buildBasicPrompt({ question, context, mainCards }) {
   const ctx = context && context.trim() ? context.trim() : "null";
+
   return `
 你是 innerSelf App 的「基礎版三張回應卡」引導者。
 抽牌已在 App 端完成，你不需要也不可以再抽牌。
@@ -93,35 +83,45 @@ function buildBasicPrompt({ question, context, mainCards }) {
 【輸入】
 - 使用者問題：${question}
 -（可選）既有前提／已選擇的路徑：${ctx}
+
 主牌：
 A) ${mainCards[0]}
 B) ${mainCards[1]}
 C) ${mainCards[2]}
 
-【規則】
-- 嚴格輸出 JSON（單一物件），不得有任何多餘文字。
-- cardText 不得改寫。
-- actionDirection：15～30 全形字
-- possibleOutcome：≤50 全形字
-- actionDirection/possibleOutcome 必須同時對應：問題 +（若有）前提 + 牌卡視角
+【嚴格規則】
+1) 不改寫牌文（cardText 必須逐字等於輸入）。
+2) 每張牌都要有：
+   - actionDirection：一句（15～30 個全形中文字）
+   - possibleOutcome：一句（50 個全形中文字以內，含標點）
+3) 【定錨規則】actionDirection 與 possibleOutcome 必須同時回應：
+   - 使用者問題
+   -（若有）既有前提／已選擇的路徑
+   - 該牌卡在此情境下提供的行動視角
+   不得只描述抽象態度或通用建議。
+4) 不占卜、不保證、不下結論。
+5) 只能輸出單一 JSON 物件，不得有多餘文字（不得 Markdown）。
 
 【輸出 JSON Schema】
 {
-  "version":"basic_v1_json",
-  "language":"zh-Hant",
-  "question":string,
-  "context":string|null,
-  "directions":[
-    {"id":"A","cardText":string,"actionDirection":string,"possibleOutcome":string},
-    {"id":"B","cardText":string,"actionDirection":string,"possibleOutcome":string},
-    {"id":"C","cardText":string,"actionDirection":string,"possibleOutcome":string}
+  "version": "basic_v1_json",
+  "language": "zh-Hant",
+  "question": string,
+  "context": string | null,
+  "directions": [
+    { "id": "A", "cardText": string, "actionDirection": string, "possibleOutcome": string },
+    { "id": "B", "cardText": string, "actionDirection": string, "possibleOutcome": string },
+    { "id": "C", "cardText": string, "actionDirection": string, "possibleOutcome": string }
   ]
 }
+
+請直接輸出 JSON。
 `.trim();
 }
 
 function buildClearPrompt({ question, context, mainCards, branchCards }) {
   const ctx = context && context.trim() ? context.trim() : "null";
+
   return `
 你是 innerSelf App 的「明晰版三張回應卡」引導者。
 抽牌已在 App 端完成，你不需要也不可以再抽牌。
@@ -140,44 +140,67 @@ A-1) ${branchCards[0]}  A-2) ${branchCards[1]}  A-3) ${branchCards[2]}
 B-1) ${branchCards[3]}  B-2) ${branchCards[4]}  B-3) ${branchCards[5]}
 C-1) ${branchCards[6]}  C-2) ${branchCards[7]}  C-3) ${branchCards[8]}
 
-【規則】
-- 嚴格輸出 JSON（單一物件），不得有任何多餘文字。
-- cardText 不得改寫。
-- 主牌：actionDirection 15～30 全形字；possibleOutcome ≤50 全形字
-- 子牌：possibleOutcome ≤50 全形字
-- 主牌 actionDirection/possibleOutcome 必須同時對應：問題 +（若有）前提 + 牌卡視角
+【嚴格規則】
+1) 不改寫牌文（cardText 必須逐字等於輸入）。
+2) 主牌 A/B/C：每個都要有：
+   - actionDirection：一句（15～30 個全形中文字）
+   - possibleOutcome：一句（50 個全形中文字以內，含標點）
+3) 子牌（A-1~C-3）：只要 possibleOutcome（50 個全形中文字以內，含標點）
+4) 【定錨規則】主牌 actionDirection 與 possibleOutcome 必須同時回應：
+   - 使用者問題
+   -（若有）既有前提／已選擇的路徑
+   - 該主牌在此情境下提供的行動視角
+   不得只描述抽象態度或通用建議。
+5) 只能輸出單一 JSON 物件，不得有多餘文字（不得 Markdown）。
 
 【輸出 JSON Schema】
 {
-  "version":"clear_v1_json",
-  "language":"zh-Hant",
-  "question":string,
-  "context":string|null,
-  "directions":[
-    {"id":"A","cardText":string,"actionDirection":string,"possibleOutcome":string,
-     "branches":[
-       {"id":"A-1","cardText":string,"possibleOutcome":string},
-       {"id":"A-2","cardText":string,"possibleOutcome":string},
-       {"id":"A-3","cardText":string,"possibleOutcome":string}
-     ]},
-    {"id":"B","cardText":string,"actionDirection":string,"possibleOutcome":string,
-     "branches":[
-       {"id":"B-1","cardText":string,"possibleOutcome":string},
-       {"id":"B-2","cardText":string,"possibleOutcome":string},
-       {"id":"B-3","cardText":string,"possibleOutcome":string}
-     ]},
-    {"id":"C","cardText":string,"actionDirection":string,"possibleOutcome":string,
-     "branches":[
-       {"id":"C-1","cardText":string,"possibleOutcome":string},
-       {"id":"C-2","cardText":string,"possibleOutcome":string},
-       {"id":"C-3","cardText":string,"possibleOutcome":string}
-     ]}
+  "version": "clear_v1_json",
+  "language": "zh-Hant",
+  "question": string,
+  "context": string | null,
+  "directions": [
+    {
+      "id": "A",
+      "cardText": string,
+      "actionDirection": string,
+      "possibleOutcome": string,
+      "branches": [
+        { "id": "A-1", "cardText": string, "possibleOutcome": string },
+        { "id": "A-2", "cardText": string, "possibleOutcome": string },
+        { "id": "A-3", "cardText": string, "possibleOutcome": string }
+      ]
+    },
+    {
+      "id": "B",
+      "cardText": string,
+      "actionDirection": string,
+      "possibleOutcome": string,
+      "branches": [
+        { "id": "B-1", "cardText": string, "possibleOutcome": string },
+        { "id": "B-2", "cardText": string, "possibleOutcome": string },
+        { "id": "B-3", "cardText": string, "possibleOutcome": string }
+      ]
+    },
+    {
+      "id": "C",
+      "cardText": string,
+      "actionDirection": string,
+      "possibleOutcome": string,
+      "branches": [
+        { "id": "C-1", "cardText": string, "possibleOutcome": string },
+        { "id": "C-2", "cardText": string, "possibleOutcome": string },
+        { "id": "C-3", "cardText": string, "possibleOutcome": string }
+      ]
+    }
   ]
 }
+
+請直接輸出 JSON。
 `.trim();
 }
 
-/* ---------- Fallbacks (keep yours or minimal) ---------- */
+/* ---------- Fallbacks ---------- */
 function fallbackBasicResponse({ question, context, mainCards }) {
   return {
     version: "basic_v1_json",
@@ -238,76 +261,112 @@ function fallbackClearResponse({ question, context, mainCards, branchCards }) {
 
 /* ---------- API: Basic ---------- */
 app.post("/ai/three-card/basic", async (req, res) => {
+  const t0 = Date.now();
+
   const { question, context, mainCards } = req.body || {};
   if (!question) return badRequest(res, "missing question");
-  if (!Array.isArray(mainCards) || mainCards.length !== 3) return badRequest(res, "mainCards must be length 3");
+  if (!Array.isArray(mainCards) || mainCards.length !== 3) {
+    return badRequest(res, "mainCards must be length 3");
+  }
 
   try {
-    console.log("➡️ calling OpenAI (basic)");
-
+    const tBuild0 = Date.now();
     const prompt = buildBasicPrompt({ question, context, mainCards });
+    const tBuild1 = Date.now();
 
+    console.log("➡️ calling OpenAI (basic)");
+    console.log("⏱ basic buildPrompt ms:", tBuild1 - tBuild0);
+
+    const tAI0 = Date.now();
     const ai = await openai.responses.create({
       model: "o4-mini",
       input: prompt,
-      // ✅ JSON mode for Responses API:
+      // JSON mode in Responses API:
       text: { format: { type: "json_object" } },
-      // 你說先取消 max token，這裡就先不放
-      // max_output_tokens: 800,
+      max_output_tokens: 700,
     });
+    const tAI1 = Date.now();
 
-    const raw = extractTextFromResponses(ai);
-    console.log("✅ OpenAI raw chars (basic):", raw.length);
+    const raw = extractText(ai);
+    console.log("⏱ basic openai ms:", tAI1 - tAI0);
+    console.log("📏 basic output chars:", raw.trim().length);
+    console.log("🧾 basic request_id:", ai?.id ?? "(no id)");
 
-    // 若 raw 是空的，立刻把 output 結構摘要印出來
-    if (!raw) {
-      console.log("🔎 OpenAI output summary (basic):", JSON.stringify(ai?.output ?? null).slice(0, 2000));
-    }
-
+    const tParse0 = Date.now();
     const parsed = parseModelJSON(raw);
-    return res.json(parsed);
+    const tParse1 = Date.now();
 
+    console.log("⏱ basic parse ms:", tParse1 - tParse0);
+    console.log("⏱ basic total ms:", tParse1 - t0);
+
+    return res.json(parsed);
   } catch (err) {
-    console.error("⚠️ OpenAI failed (basic) => fallback", err?.code ?? err, err?.preview ? `preview=${err.preview}` : "");
+    const code = err?.code ?? err?.type ?? "UNKNOWN_ERROR";
+    const detail = err?.details ? ` details=${err.details}` : "";
+    const preview = err?.preview ? ` preview=${err.preview}` : "";
+    console.error(`⚠️ OpenAI failed (basic), fallback used: ${code}${detail}${preview}`);
+
+    console.log("⏱ basic total ms (fallback):", Date.now() - t0);
     return res.json(fallbackBasicResponse({ question, context, mainCards }));
   }
 });
 
 /* ---------- API: Clear ---------- */
 app.post("/ai/three-card/clear", async (req, res) => {
+  const t0 = Date.now();
+
   const { question, context, mainCards, branchCards } = req.body || {};
   if (!question) return badRequest(res, "missing question");
-  if (!Array.isArray(mainCards) || mainCards.length !== 3) return badRequest(res, "mainCards must be length 3");
-  if (!Array.isArray(branchCards) || branchCards.length !== 9) return badRequest(res, "branchCards must be length 9");
+  if (!Array.isArray(mainCards) || mainCards.length !== 3) {
+    return badRequest(res, "mainCards must be length 3");
+  }
+  if (!Array.isArray(branchCards) || branchCards.length !== 9) {
+    return badRequest(res, "branchCards must be length 9");
+  }
 
   try {
-    console.log("➡️ calling OpenAI (clear)");
-
+    const tBuild0 = Date.now();
     const prompt = buildClearPrompt({ question, context, mainCards, branchCards });
+    const tBuild1 = Date.now();
 
+    console.log("➡️ calling OpenAI (clear)");
+    console.log("⏱ clear buildPrompt ms:", tBuild1 - tBuild0);
+
+    const tAI0 = Date.now();
     const ai = await openai.responses.create({
       model: "o4-mini",
       input: prompt,
       text: { format: { type: "json_object" } },
-      // max_output_tokens: 1200,
+      max_output_tokens: 2000,
     });
+    const tAI1 = Date.now();
 
-    const raw = extractTextFromResponses(ai);
-    console.log("✅ OpenAI raw chars (clear):", raw.length);
+    const raw = extractText(ai);
+    console.log("⏱ clear openai ms:", tAI1 - tAI0);
+    console.log("📏 clear output chars:", raw.trim().length);
+    console.log("🧾 clear request_id:", ai?.id ?? "(no id)");
 
-    if (!raw) {
-      console.log("🔎 OpenAI output summary (clear):", JSON.stringify(ai?.output ?? null).slice(0, 2000));
-    }
-
+    const tParse0 = Date.now();
     const parsed = parseModelJSON(raw);
-    return res.json(parsed);
+    const tParse1 = Date.now();
 
+    console.log("⏱ clear parse ms:", tParse1 - tParse0);
+    console.log("⏱ clear total ms:", tParse1 - t0);
+
+    return res.json(parsed);
   } catch (err) {
-    console.error("⚠️ OpenAI failed (clear) => fallback", err?.code ?? err, err?.preview ? `preview=${err.preview}` : "");
+    const code = err?.code ?? err?.type ?? "UNKNOWN_ERROR";
+    const detail = err?.details ? ` details=${err.details}` : "";
+    const preview = err?.preview ? ` preview=${err.preview}` : "";
+    console.error(`⚠️ OpenAI failed (clear), fallback used: ${code}${detail}${preview}`);
+
+    console.log("⏱ clear total ms (fallback):", Date.now() - t0);
     return res.json(fallbackClearResponse({ question, context, mainCards, branchCards }));
   }
 });
 
 /* ---------- Start ---------- */
 const PORT = process.env.PORT || 8080;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
